@@ -4,6 +4,8 @@ import { useChartStore } from '../store/chartStore';
 export default function PalettePanel() {
   const chart = useChartStore((s) => s.getCurrentChart());
   const updateChart = useChartStore((s) => s.updateChart);
+  const takeSnapshot = useChartStore((s) => s.takeSnapshot);
+  const pushHistory = useChartStore((s) => s.pushHistory);
   const selectedColorIndex = useChartStore((s) => s.selectedColorIndex);
   const setSelectedColorIndex = useChartStore((s) => s.setSelectedColorIndex);
   const [newColor, setNewColor] = useState('#3498db');
@@ -13,15 +15,18 @@ export default function PalettePanel() {
 
   const addColor = () => {
     const name = newName.trim() || `颜色 ${chart.palette.length + 1}`;
+    const before = takeSnapshot();
     updateChart(chart.id, (c) => ({
       ...c,
       palette: [...c.palette, { id: Math.random().toString(36).slice(2), name, hex: newColor }],
     }));
+    if (before) pushHistory('添加颜色', before);
     setNewName('');
   };
 
   const removeColor = (index: number) => {
     if (chart.palette.length <= 1) return;
+    const before = takeSnapshot();
     updateChart(chart.id, (c) => {
       const palette = c.palette.filter((_, i) => i !== index);
       const newCells = new Uint16Array(c.cells);
@@ -34,11 +39,13 @@ export default function PalettePanel() {
     if (selectedColorIndex >= index && selectedColorIndex > 0) {
       setSelectedColorIndex(selectedColorIndex - 1);
     }
+    if (before) pushHistory('删除颜色', before);
   };
 
   const moveColor = (index: number, dir: number) => {
     const newIndex = index + dir;
     if (newIndex < 0 || newIndex >= chart.palette.length) return;
+    const before = takeSnapshot();
     updateChart(chart.id, (c) => {
       const palette = [...c.palette];
       [palette[index], palette[newIndex]] = [palette[newIndex], palette[index]];
@@ -53,6 +60,7 @@ export default function PalettePanel() {
     });
     if (selectedColorIndex === index) setSelectedColorIndex(newIndex);
     else if (selectedColorIndex === newIndex) setSelectedColorIndex(index);
+    if (before) pushHistory('移动颜色', before);
   };
 
   return (

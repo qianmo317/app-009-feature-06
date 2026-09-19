@@ -1,6 +1,32 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { Chart, Tool, Point, Rect } from '../types';
+import type { Chart, Tool, Point, Rect, Palette } from '../types';
+
+const MAX_HISTORY = 50;
+
+export type HistorySnapshot = {
+  cells: Uint16Array;
+  palette: Palette[];
+  cols: number;
+  rows: number;
+  selectedColorIndex: number;
+};
+
+export type HistoryEntry = {
+  label: string;
+  before: HistorySnapshot;
+  after: HistorySnapshot;
+};
+
+function applySnapshot(chart: Chart, snap: HistorySnapshot): Chart {
+  return {
+    ...chart,
+    cols: snap.cols,
+    rows: snap.rows,
+    palette: snap.palette.map((p) => ({ ...p })),
+    cells: new Uint16Array(snap.cells),
+  };
+}
 
 function generateId() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -36,6 +62,8 @@ interface AppState {
   selection: Rect | null;
   isSelecting: boolean;
   showGrid: boolean;
+  history: HistoryEntry[];
+  historyIndex: number;
 }
 
 interface AppActions {
@@ -56,6 +84,11 @@ interface AppActions {
   setSelection: (r: Rect | null) => void;
   setIsSelecting: (v: boolean) => void;
   setShowGrid: (v: boolean) => void;
+  takeSnapshot: () => HistorySnapshot | null;
+  pushHistory: (label: string, before: HistorySnapshot) => void;
+  undo: () => void;
+  redo: () => void;
+  clearHistory: () => void;
   getCurrentChart: () => Chart | null;
 }
 
@@ -75,19 +108,24 @@ export const useChartStore = create<AppState & AppActions>()(
       selection: null,
       isSelecting: false,
       showGrid: true,
+      history: [],
+      historyIndex: 0,
 
       createChart: (cols, rows, title) => {
         const chart = createEmptyChart(cols, rows, title);
-        set((s) => ({ charts: [...s.charts, chart], currentChartId: chart.id }));
+        set((s) => ({ charts: [...s.charts, chart], currentChartId: chart.id, history: [], historyIndex: 0 }));
         return chart.id;
       },
 
       deleteChart: (id) => {
         set((s) => {
           const charts = s.charts.filter((c) => c.id !== id);
+          const currentChartId = s.currentChartId === id ? (charts[0]?.id ?? null) : s.currentChartId;
+          const switched = currentChartId !== s.currentChartId;
           return {
             charts,
-            currentChartId: s.currentChartId === id ? (charts[0]?.id ?? null) : s.currentChartId,
+            currentChartId,
+            ...(switched ? { history: [], historyIndex: 0 } : {}),
           };
         });
       },
@@ -101,11 +139,12 @@ export const useChartStore = create<AppState & AppActions>()(
           title: src.title + ' 副本',
           cells: new Uint16Array(src.cells),
         };
-        set((s) => ({ charts: [...s.charts, chart], currentChartId: chart.id }));
+        set((s) => ({ charts: [...s.charts, chart], currentChartId: chart.id, history: [], historyIndex: 0 }));
         return chart.id;
       },
 
-      setCurrentChart: (id) => set({ currentChartId: id }),
+      setCurrentChart: (id) =>
+        set((s) => (id === s.currentChartId ? {} : { currentChartId: id, history: [], historyIndex: 0 })),
 
       updateChart: (id, updater) => {
         set((s) => ({
@@ -125,6 +164,68 @@ export const useChartStore = create<AppState & AppActions>()(
       setSelection: (selection) => set({ selection }),
       setIsSelecting: (isSelecting) => set({ isSelecting }),
       setShowGrid: (showGrid) => set({ showGrid }),
+
+      takeSnapshot: () => {
+        const s = get();
+        const chart = s.charts.find((c) => c.id === s.currentChartId);
+        if (!chart) return null;
+        return {
+          cells: new Uint16Array(chart.cells),
+          palette: chart.palette.map((p) => ({ ...p })),
+          cols: chart.cols,
+          rows: chart.rows,
+          selectedColorIndex: s.selectedColorIndex,
+        };
+      },
+
+      pushHistory: (label, before) => {
+        const s = get();
+        const chart = s.charts.find((c) => c.id === s.currentChartId);
+        if (!chart) return;
+        const after: HistorySnapshot = {
+          cells: new Uint16Array(chart.cells),
+          palette: chart.palette.map((p) => ({ ...p })),
+          cols: chart.cols,
+          rows: chart.rows,
+          selectedColorIndex: s.selectedColorIndex,
+        };
+        set((st) => {
+          // 退到中间某一步后再落笔：丢掉后面的记录
+          const kept = st.history.slice(0, st.historyIndex);
+          if (kept.length >= MAX_HISTORY) kept.shift();
+          return { history: [...kept, { label, before, after }], historyIndex: kept.length + 1 };
+        });
+      },
+
+      undo: () => {
+        const { history, historyIndex, currentChartId } = get();
+        if (historyIndex <= 0) return;
+        const entry = history[historyIndex - 1];
+        set((s) => ({
+          historyIndex: s.historyIndex - 1,
+          selectedColorIndex: Math.min(
+            entry.before.selectedColorIndex,
+            Math.max(0, entry.before.palette.length - 1)
+          ),
+          charts: s.charts.map((c) => (c.id === currentChartId ? applySnapshot(c, entry.before) : c)),
+        }));
+      },
+
+      redo: () => {
+        const { history, historyIndex, currentChartId } = get();
+        if (historyIndex >= history.length) return;
+        const entry = history[historyIndex];
+        set((s) => ({
+          historyIndex: s.historyIndex + 1,
+          selectedColorIndex: Math.min(
+            entry.after.selectedColorIndex,
+            Math.max(0, entry.after.palette.length - 1)
+          ),
+          charts: s.charts.map((c) => (c.id === currentChartId ? applySnapshot(c, entry.after) : c)),
+        }));
+      },
+
+      clearHistory: () => set({ history: [], historyIndex: 0 }),
 
       getCurrentChart: () => {
         const { charts, currentChartId } = get();

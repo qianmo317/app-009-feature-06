@@ -1,8 +1,17 @@
 import { useRef, useEffect, useCallback } from 'react';
 import { useChartStore } from '../store/chartStore';
+import type { HistorySnapshot } from '../store/chartStore';
 import type { Chart, Point, Rect } from '../types';
 
 const BASE_CELL = 20;
+
+function cellsChanged(a: Uint16Array, b: Uint16Array): boolean {
+  if (a.length !== b.length) return true;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return true;
+  }
+  return false;
+}
 
 export default function CanvasGrid() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -36,6 +45,7 @@ export default function CanvasGrid() {
   const startCellRef = useRef<Point | null>(null);
   const previewRef = useRef<Rect | null>(null);
   const currentCellsRef = useRef<Uint16Array | null>(null);
+  const strokeSnapshotRef = useRef<HistorySnapshot | null>(null);
   const rafRef = useRef<number>(0);
   const needsRedrawRef = useRef(true);
 
@@ -279,6 +289,17 @@ export default function CanvasGrid() {
     return newCells;
   };
 
+  // 一次笔画（按下到抬起）合并为一条历史记录
+  const commitStroke = (label: string) => {
+    const before = strokeSnapshotRef.current;
+    strokeSnapshotRef.current = null;
+    if (!before) return;
+    const st = useChartStore.getState();
+    const chart = st.charts.find((ch) => ch.id === st.currentChartId);
+    if (!chart) return;
+    if (cellsChanged(before.cells, chart.cells)) st.pushHistory(label, before);
+  };
+
   const handleMouseDown = (e: React.MouseEvent) => {
     const c = stateRef.current.chart;
     if (!c) return;
@@ -311,6 +332,7 @@ export default function CanvasGrid() {
     drawingRef.current = true;
     startCellRef.current = cell;
     currentCellsRef.current = new Uint16Array(c.cells);
+    strokeSnapshotRef.current = useChartStore.getState().takeSnapshot();
 
     if (tool === 'pencil' || tool === 'mirror') {
       const newCells = paintCell(c, cell.x, cell.y, selectedColorIndex);
@@ -318,8 +340,13 @@ export default function CanvasGrid() {
         useChartStore.getState().updateChart(c.id, (ch) => ({ ...ch, cells: newCells }));
       }
     } else if (tool === 'bucket') {
+      const before = strokeSnapshotRef.current;
+      strokeSnapshotRef.current = null;
       const newCells = fillBucket(c, cell.x, cell.y, selectedColorIndex);
-      useChartStore.getState().updateChart(c.id, (ch) => ({ ...ch, cells: newCells }));
+      if (newCells !== c.cells) {
+        useChartStore.getState().updateChart(c.id, (ch) => ({ ...ch, cells: newCells }));
+        if (before) useChartStore.getState().pushHistory('油漆桶', before);
+      }
       drawingRef.current = false;
     } else if (tool === 'line' || tool === 'rect') {
       previewRef.current = { x: cell.x, y: cell.y, w: 1, h: 1 };
@@ -393,9 +420,14 @@ export default function CanvasGrid() {
 
     const cell = getCellFromEvent(e);
     if (!cell) {
+      if (tool === 'pencil' || tool === 'mirror') {
+        commitStroke(tool === 'pencil' ? '铅笔' : '镜像');
+      }
       drawingRef.current = false;
       startCellRef.current = null;
       previewRef.current = null;
+      currentCellsRef.current = null;
+      strokeSnapshotRef.current = null;
       needsRedrawRef.current = true;
       return;
     }
@@ -403,15 +435,20 @@ export default function CanvasGrid() {
     if (tool === 'line') {
       const newCells = drawLine(c, startCellRef.current.x, startCellRef.current.y, cell.x, cell.y, selectedColorIndex);
       useChartStore.getState().updateChart(c.id, (ch) => ({ ...ch, cells: newCells }));
+      commitStroke('直线');
     } else if (tool === 'rect') {
       const newCells = drawRect(c, startCellRef.current.x, startCellRef.current.y, cell.x, cell.y, selectedColorIndex);
       useChartStore.getState().updateChart(c.id, (ch) => ({ ...ch, cells: newCells }));
+      commitStroke('矩形');
+    } else if (tool === 'pencil' || tool === 'mirror') {
+      commitStroke(tool === 'pencil' ? '铅笔' : '镜像');
     }
 
     drawingRef.current = false;
     startCellRef.current = null;
     previewRef.current = null;
     currentCellsRef.current = null;
+    strokeSnapshotRef.current = null;
     needsRedrawRef.current = true;
   };
 
@@ -429,12 +466,26 @@ export default function CanvasGrid() {
     e.preventDefault();
   };
 
-  // Copy / Paste shortcuts
+  // Copy / Paste / Undo / Redo shortcuts
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const st = stateRef.current;
       const c = st.chart;
       if (!c) return;
+      const target = e.target as HTMLElement | null;
+      const isEditable =
+        !!target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+      if ((e.ctrlKey || e.metaKey) && !isEditable && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault();
+        if (e.shiftKey) useChartStore.getState().redo();
+        else useChartStore.getState().undo();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && !isEditable && (e.key === 'y' || e.key === 'Y')) {
+        e.preventDefault();
+        useChartStore.getState().redo();
+        return;
+      }
       if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
         if (st.selection) {
           const scols = st.selection.w;
@@ -452,6 +503,7 @@ export default function CanvasGrid() {
       if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
         const cb = useChartStore.getState().clipboard;
         if (cb && st.selection) {
+          const before = useChartStore.getState().takeSnapshot();
           const newCells = new Uint16Array(c.cells);
           for (let r = 0; r < cb.rows; r++) {
             for (let cc = 0; cc < cb.cols; cc++) {
@@ -462,7 +514,10 @@ export default function CanvasGrid() {
               }
             }
           }
-          useChartStore.getState().updateChart(c.id, (ch) => ({ ...ch, cells: newCells }));
+          if (before && cellsChanged(before.cells, newCells)) {
+            useChartStore.getState().updateChart(c.id, (ch) => ({ ...ch, cells: newCells }));
+            useChartStore.getState().pushHistory('粘贴', before);
+          }
         }
       }
     };

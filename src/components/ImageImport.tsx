@@ -41,6 +41,7 @@ export default function ImageImport() {
         hex: rgbToHex(rgb),
       }));
 
+      const before = useChartStore.getState().takeSnapshot();
       updateChart(chart.id, (c) => ({
         ...c,
         cols,
@@ -48,6 +49,7 @@ export default function ImageImport() {
         palette: newPalette,
         cells: indices,
       }));
+      if (before) useChartStore.getState().pushHistory('导入图片', before);
 
       setLoading(false);
       worker.terminate();
