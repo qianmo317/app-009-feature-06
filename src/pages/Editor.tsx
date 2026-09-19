@@ -13,6 +13,10 @@ export default function Editor() {
   const charts = useChartStore((s) => s.charts);
   const setCurrentChart = useChartStore((s) => s.setCurrentChart);
   const updateChart = useChartStore((s) => s.updateChart);
+  const undo = useChartStore((s) => s.undo);
+  const redo = useChartStore((s) => s.redo);
+  const canUndo = useChartStore((s) => s.history.past.length > 0);
+  const canRedo = useChartStore((s) => s.history.future.length > 0);
   const chart = charts.find((c) => c.id === id);
   const [title, setTitle] = useState(chart?.title ?? '');
 
@@ -41,6 +45,22 @@ export default function Editor() {
         <button onClick={() => navigate('/')} style={{ padding: '4px 8px', fontSize: 12, borderRadius: 4, border: '1px solid #bdc3c7', background: '#fff', cursor: 'pointer' }}>
           ← 返回
         </button>
+        <button
+          onClick={undo}
+          disabled={!canUndo}
+          title="撤销 (Ctrl+Z)"
+          style={{ padding: '4px 8px', fontSize: 12, borderRadius: 4, border: '1px solid #bdc3c7', background: '#fff', cursor: canUndo ? 'pointer' : 'default', opacity: canUndo ? 1 : 0.4 }}
+        >
+          ↶ 撤销
+        </button>
+        <button
+          onClick={redo}
+          disabled={!canRedo}
+          title="重做 (Ctrl+Shift+Z / Ctrl+Y)"
+          style={{ padding: '4px 8px', fontSize: 12, borderRadius: 4, border: '1px solid #bdc3c7', background: '#fff', cursor: canRedo ? 'pointer' : 'default', opacity: canRedo ? 1 : 0.4 }}
+        >
+          ↷ 重做
+        </button>
         <input
           type="text"
           value={title}
@@ -49,7 +69,7 @@ export default function Editor() {
           style={{ flex: 1, fontSize: 16, fontWeight: 500, border: 'none', outline: 'none', background: 'transparent' }}
         />
         <div style={{ fontSize: 12, color: '#888' }}>
-          空格拖拽 · 滚轮缩放 · 右键吸色 · Ctrl+C/V 复制粘贴
+          空格拖拽 · 滚轮缩放 · 右键吸色 · Ctrl+C/V 复制粘贴 · Ctrl+Z 撤销
         </div>
       </header>
       <StatusBar />

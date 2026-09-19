@@ -41,6 +41,9 @@ export default function ImageImport() {
         hex: rgbToHex(rgb),
       }));
 
+      // worker 返回时可能已切图，只有仍在当前图才记录历史
+      const state = useChartStore.getState();
+      if (state.currentChartId === chart.id) state.recordHistory();
       updateChart(chart.id, (c) => ({
         ...c,
         cols,

@@ -315,11 +315,16 @@ export default function CanvasGrid() {
     if (tool === 'pencil' || tool === 'mirror') {
       const newCells = paintCell(c, cell.x, cell.y, selectedColorIndex);
       if (newCells) {
+        // 一笔只记一次历史，后续拖动不再重复记录
+        useChartStore.getState().recordHistory();
         useChartStore.getState().updateChart(c.id, (ch) => ({ ...ch, cells: newCells }));
       }
     } else if (tool === 'bucket') {
       const newCells = fillBucket(c, cell.x, cell.y, selectedColorIndex);
-      useChartStore.getState().updateChart(c.id, (ch) => ({ ...ch, cells: newCells }));
+      if (newCells !== c.cells) {
+        useChartStore.getState().recordHistory();
+        useChartStore.getState().updateChart(c.id, (ch) => ({ ...ch, cells: newCells }));
+      }
       drawingRef.current = false;
     } else if (tool === 'line' || tool === 'rect') {
       previewRef.current = { x: cell.x, y: cell.y, w: 1, h: 1 };
@@ -401,9 +406,11 @@ export default function CanvasGrid() {
     }
 
     if (tool === 'line') {
+      useChartStore.getState().recordHistory();
       const newCells = drawLine(c, startCellRef.current.x, startCellRef.current.y, cell.x, cell.y, selectedColorIndex);
       useChartStore.getState().updateChart(c.id, (ch) => ({ ...ch, cells: newCells }));
     } else if (tool === 'rect') {
+      useChartStore.getState().recordHistory();
       const newCells = drawRect(c, startCellRef.current.x, startCellRef.current.y, cell.x, cell.y, selectedColorIndex);
       useChartStore.getState().updateChart(c.id, (ch) => ({ ...ch, cells: newCells }));
     }
@@ -429,9 +436,25 @@ export default function CanvasGrid() {
     e.preventDefault();
   };
 
-  // Copy / Paste shortcuts
+  // Copy / Paste / Undo / Redo shortcuts
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      // 输入框里不拦截按键（保留文本框自身的撤销等行为）
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
+
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault();
+        if (e.shiftKey) useChartStore.getState().redo();
+        else useChartStore.getState().undo();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || e.key === 'Y')) {
+        e.preventDefault();
+        useChartStore.getState().redo();
+        return;
+      }
+
       const st = stateRef.current;
       const c = st.chart;
       if (!c) return;
@@ -452,6 +475,7 @@ export default function CanvasGrid() {
       if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
         const cb = useChartStore.getState().clipboard;
         if (cb && st.selection) {
+          useChartStore.getState().recordHistory();
           const newCells = new Uint16Array(c.cells);
           for (let r = 0; r < cb.rows; r++) {
             for (let cc = 0; cc < cb.cols; cc++) {
